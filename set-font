@@ -1,0 +1,224 @@
+#!/bin/bash
+
+function usage () {
+  cat <<-EOT 1>&2
+`basename "$0"` <FONT_NAME> <FONT_SIZE> <TMUX> <WINDOWID> [<FORCE>]
+
+  FONT_NAME
+    "-"     = launch percol.
+  FONT_SIZE
+    Allow bellow formats.
+      "-2"  = font size decrease by 2.
+      "+2"  = font size increase by 2.
+      "12"  = font size change to 12.
+  TMUX
+    If you are in tmux, give "1".
+    If empty or ommited, set by ENV.
+  WINDOW_ID
+    If given, search tty by window id.
+  FORCE
+    If "1", force to direct echo tty.
+EOT
+
+}
+
+function put () {
+  local tmux="$1"
+  local value="$2"
+
+  [ "$tmux" = 1 ] && printf '\ePtmux;\e'
+  printf '\e]50;%s\007' "$value"
+  [ "$tmux" = 1 ] && printf '\e\\'
+}
+
+function save () {
+  local fn="$1"
+  local value="$2"
+
+  if [ -n "$value" ]
+  then
+    [ ! -f "$fn" ] && local mod=1
+    echo -n "$value" > "$fn"
+    [ "$mod" = 1 ] && chmod 600 "$fn"
+  fi
+}
+
+function calc_size () {
+  local cur_size="$1"
+  local arg_size="$2"
+
+  if expr "$arg_size" : '[-+][0-9]\+' > /dev/null
+  then
+    local sign=`echo "$arg_size" | cut -b1`
+    local value=`echo "$arg_size" | cut -b2-`
+    echo `expr "$cur_size" "$sign" "$value"`
+  else
+    echo "$arg_size"
+  fi
+
+}
+
+# focus <WINDOW_ID>
+function focus () {
+  local window_id="${1:-$WINDOWID}"
+  if which xc 2>&1 > /dev/null
+  then
+    xc focus "$window_id"
+  fi
+}
+
+# select-window
+function select-window () {
+  printf '%d' $( xwininfo | grep 'xwininfo: Window id:' | sed 's/xwininfo: Window id: //' | sed 's/\s.*$//' )
+}
+
+
+# set_font <FONT_NAME> <FONT_SIZE> <TMUX> <WINDOWID> <FORCE>
+function set_font () {
+  local font_name="$1"
+  local font_size="$2"
+  local tmux="$3"
+  local window_id="${4:-$WINDOWID}"
+  local force="${5:-0}"
+
+  if [ "$window_id" = "select" ]
+  then
+    local window_id=$(select-window)
+  fi
+
+  local cur_name_file="/tmp/urxvt-font-name-$window_id"
+  local cur_size_file="/tmp/urxvt-font-size-$window_id"
+
+  local xdefaults=`grep -i '^\s*urxvt.font' ~/.Xdefaults | cut -d: -f2- | sed 's/^ *\| *$//'`
+
+  # デフォルト値など {{{
+  if [ -z "$font_name" ]
+  then
+    if [ -f "$cur_name_file" ]
+    then
+      local font_name=`cat "$cur_name_file"`
+    else
+      local font_name=`echo "$xdefaults" | cut -d: -f2`
+    fi
+  elif [ "$font_name" = '-' ]
+  then
+    local font_name=`font-names 2 | percol`
+  fi
+
+  [ -f "$cur_size_file" ] && local cur_font_size=`cat "$cur_size_file"`
+  [ -z "$cur_font_size" ] && local cur_font_size=`echo "$xdefaults" | sed 's/.*:\(pixel\)\?size=\([0-9]\+\).*/\2/'`
+  [ -n "$font_size" ] && [ -n "$cur_size"] && local font_size=`calc_size "$cur_font_size" "$font_size"`
+  [ -z "$font_size" -a -n "$cur_font_size" ] && local font_size="$cur_font_size"
+
+  [ -z "$tmux" -a -n "$TMUX" ] && local tmux=1
+  # }}}
+
+  # ウィンドウに対する tty の検索 {{{
+  if [ ! "$window_id" = "$WINDOWID" ] || [ "$force" = 1 ]
+  then
+    # 外の指定ウィンドウに送る場合は、tmux ではなくなるので。
+    local tmux=0
+    local window_pid=`xprop -id "$window_id" _NET_WM_PID | cut -d= -f2 | sed 's/ *//g'`
+
+    local tty_name=''
+    local pid="$window_pid"
+
+    while [ -z "$tty_name" -a -n "$pid" ]
+    do
+      local tty_name=`ps --no-headers --format tty --pid "$pid" | grep -v '?' | head -1`
+      local pid=`ps --no-headers --format pid --ppid="$pid" | tr --delete ' ' | tr "\n" ',' | sed 's/,$//'`
+    done
+
+    [ -z "$tty_name" ] && exit 1
+  fi
+  # }}}
+
+  # 置換 {{{
+  local named=0
+  local new_value=`
+    IFS=:
+    for it in $xdefaults
+    do
+      case "$it" in
+        xft)
+          echo -n xft:
+          ;;
+        size=*)
+          if [ -z "$font_size" ]
+          then
+            echo -n "$it:"
+          else
+            echo -n "size=$font_size:"
+          fi
+          ;;
+        pixelsize=*)
+          if [ -z "$font_size" ]
+          then
+            echo -n "$it:"
+          else
+            echo -n "pixelsize=$font_size:"
+          fi
+          ;;
+        *=*)
+          echo -n "$it:"
+          ;;
+        *)
+          if [ "$named" = 0 ]
+          then
+            echo -n "$font_name:"
+            named=1
+          else
+            echo -n "$it:"
+          fi
+          ;;
+      esac
+    done | sed 's/:$//'
+  `
+  # }}}
+
+  # 現在値の保存 {{{
+  save "$cur_name_file" "$font_name"
+  save "$cur_size_file" "$font_size"
+  # }}}
+
+  # 変更 {{{
+
+  if [ -n "$tty_name" ]
+  then
+    put "$tmux" "$new_value" > "/dev/$tty_name"
+  else
+    put "$tmux" "$new_value"
+  fi
+  # }}}
+
+  # Window フォーカス
+  [ -n "$window_id" ] && focus "$window_id"
+
+  true
+}
+
+# clean [<WINDOW_ID>]
+function clean () {
+  local window_id="${1:-$WINDOWID}"
+  if ls /tmp/urxvt-font-{name,size}-$window_id > /dev/null 2>&1
+  then
+    /usr/bin/rm /tmp/urxvt-font-{name,size}-$window_id
+  fi
+}
+
+
+
+if [ "$#" = 0 ]
+then
+  usage
+else
+  case "$1" in
+    --clean)
+      clean
+      ;;
+    *)
+      set_font "$@"
+      ;;
+  esac
+fi
+
