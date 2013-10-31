@@ -89,7 +89,7 @@ function set_font () {
   local cur_name_file="/tmp/urxvt-font-name-$window_id"
   local cur_size_file="/tmp/urxvt-font-size-$window_id"
 
-  local xdefaults=`grep -i '^\s*urxvt.font' ~/.Xdefaults | cut -d: -f2- | sed 's/^ *\| *$//'`
+  local xdefaults=`grep -i '^ *urxvt.font' ~/.Xdefaults | cut -d: -f2- | sed 's/^ *\| *$//'`
 
   # デフォルト値など {{{
   if [ -z "$font_name" ]
