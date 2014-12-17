@@ -2,7 +2,8 @@
 
 function usage () {
   cat <<-EOT 1>&2
-Usage: `basename "$0"` [-f] <FONT_NAME> <FONT_SIZE> <TMUX> <WINDOWID> [<FORCE>]
+Usage: set-font [-f] <FONT_NAME> <FONT_SIZE> <TMUX> <WINDOWID> [<FORCE>]
+                -c
 
 Arguments:
   FONT_NAME
@@ -22,6 +23,7 @@ Arguments:
 
 Options:
   -f          Focus to window
+  -c          Clean up information file for current window
 EOT
 
 }
@@ -211,10 +213,14 @@ function clean () {
 }
 
 
-while getopts ':f' OPTION
+while getopts ':fhc' OPTION
 do
   case "$OPTION" in
     f) OPT_DO_FOCUS=1 ;;
+    c)
+      clean
+      exit
+      ;;
     h)
       usage
       exit
@@ -230,13 +236,6 @@ if [ "$#" = 0 ]
 then
   usage
 else
-  case "$1" in
-    --clean)
-      clean
-      ;;
-    *)
-      set_font "$@"
-      ;;
-  esac
+  set_font "$@"
 fi
 
